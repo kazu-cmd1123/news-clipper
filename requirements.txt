@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+line-bot-sdk
+supabase
+python-dotenv
+beautifulsoup4
+feedparser
+requests
