@@ -63,23 +63,38 @@ def get_user_keywords(user_id: str) -> List[str]:
         return []
 
 def get_all_users_and_keywords() -> dict:
-    """Returns a dict of user_id -> List[keyword]"""
+    """Returns a dict of user_id -> List[{keyword, last_seen_published}]"""
     client = get_db_client()
     if not client:
         return {}
     try:
-        response = client.table("keywords").select("user_id, keyword").execute()
+        response = client.table("keywords").select("user_id, keyword, last_seen_published").execute()
         result = {}
         for row in response.data:
             uid = row["user_id"]
-            kw = row["keyword"]
             if uid not in result:
                 result[uid] = []
-            result[uid].append(kw)
+            result[uid].append({
+                "keyword": row["keyword"],
+                "last_seen_published": row["last_seen_published"]
+            })
         return result
     except Exception as e:
         logger.error(f"Error fetching all keywords: {e}")
         return {}
+
+def update_last_seen_published(user_id: str, keyword: str, dt_str: str) -> bool:
+    client = get_db_client()
+    if not client:
+        return False
+    try:
+        client.table("keywords").update({
+            "last_seen_published": dt_str
+        }).eq("user_id", user_id).eq("keyword", keyword).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Error updating last_seen_published: {e}")
+        return False
 
 def set_delivery_time(user_id: str, time_str: str) -> bool:
     client = get_db_client()

@@ -6,3 +6,4 @@ python-dotenv
 beautifulsoup4
 feedparser
 requests
+python-dateutil

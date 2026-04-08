@@ -135,26 +135,69 @@ def handle_message(event):
 
     elif text == "ニュース":
         def fetch_user_news():
-            keywords = database.get_user_keywords(user_id)
-            if not keywords:
+            import datetime
+            from dateutil import parser as date_parser
+            
+            user_kw_data = database.get_all_users_and_keywords().get(user_id, [])
+            if not user_kw_data:
                 send_push_message(user_id, "登録されているキーワードはありません。まずは「追加」でキーワードを登録してください。")
                 return
-            message_lines = ["【手動取得ニュース】"]
-            for kw in keywords:
-                news_list = crawler.fetch_latest_news(kw, max_items=3)
-                if news_list:
-                    send_to_spreadsheet(kw, news_list)
-                    message_lines.append(f"\n◆ {kw}")
-                    for news in news_list:
-                        message_lines.append(f"・{news['title']} ({news['published']})\n{news['link']}")
-            if len(message_lines) > 1:
-                send_push_message(user_id, "\n".join(message_lines))
+                
+            total_message_lines = ["【新着ニュース＆SNS】"]
+            
+            for item in user_kw_data:
+                kw = item["keyword"]
+                last_seen_str = item.get("last_seen_published")
+                since_dt = None
+                if last_seen_str:
+                    try:
+                        since_dt = date_parser.parse(last_seen_str)
+                    except:
+                        pass
+                
+                # 1. ニュース全件取得
+                news_list = crawler.fetch_latest_news(kw, since_dt=since_dt)
+                
+                # 2. SNS投稿取得
+                sns_list = crawler.fetch_sns_posts(kw)
+                
+                if news_list or sns_list:
+                    total_message_lines.append(f"\n◆ {kw}")
+                    
+                    # ニュースの表示とスプレッドシート送信
+                    if news_list:
+                        total_message_lines.append("  [News]")
+                        for news in news_list:
+                            total_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                        send_to_spreadsheet(kw, news_list)
+                        
+                        # 最新の日時をDBに保存
+                        latest_dt = news_list[-1]["pub_dt"]
+                        if latest_dt:
+                            database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
+                    
+                    # SNSの表示とスプレッドシート送信
+                    if sns_list:
+                        total_message_lines.append("  [SNS/X]")
+                        sns_for_sheet = []
+                        for sns in sns_list:
+                            total_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                            sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
+                        send_to_spreadsheet(kw + " (SNS)", sns_for_sheet)
+
+            if len(total_message_lines) > 1:
+                # LINEのメッセージサイズ制限に配慮し、長すぎる場合は分割して送る工夫
+                full_msg = "\n".join(total_message_lines)
+                if len(full_msg) > 4000:
+                    send_push_message(user_id, full_msg[:4000] + "\n(長い文章のため省略されました)")
+                else:
+                    send_push_message(user_id, full_msg)
             else:
-                send_push_message(user_id, "関連する最新ニュースは見つかりませんでした。")
+                send_push_message(user_id, "前回取得以降の新着情報はありませんでした。")
 
         import threading
         threading.Thread(target=fetch_user_news).start()
-        reply_text = "最新のニュースを取得しています。少しお待ちください..."
+        reply_text = "新着記事とSNS投稿を確認しています。少しお待ちください..."
             
     elif text.startswith("配信時間"):
         time_str = text.replace("配信時間", "").strip()
@@ -211,31 +254,65 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
     """
     def job():
         import datetime
+        from dateutil import parser as date_parser
         jst_tz = datetime.timezone(datetime.timedelta(hours=9))
         current_hour_str = datetime.datetime.now(jst_tz).strftime('%H:00')
 
-        user_keywords = database.get_all_users_and_keywords()
+        user_kw_all_data = database.get_all_users_and_keywords()
         user_settings = database.get_all_users_settings()
         
-        for user_id, keywords in user_keywords.items():
-            if not keywords:
+        for user_id, keywords_info in user_kw_all_data.items():
+            if not keywords_info:
                 continue
                 
             delivery_time = user_settings.get(user_id, "07:00")
             if delivery_time != current_hour_str:
                 continue
             
-            message_lines = [f"【本日のニュースクリップ（{delivery_time}配信号）】"]
-            for kw in keywords:
-                news_list = crawler.fetch_latest_news(kw, max_items=3)
-                if news_list:
-                    send_to_spreadsheet(kw, news_list)
-                    message_lines.append(f"\n◆ {kw}")
-                    for news in news_list:
-                        message_lines.append(f"・{news['title']} ({news['published']})\n{news['link']}")
+            total_message_lines = [f"【本日のニュース＆SNS（{delivery_time}配信号）】"]
             
-            if len(message_lines) > 1:
-                send_push_message(user_id, "\n".join(message_lines))
+            for item in keywords_info:
+                kw = item["keyword"]
+                last_seen_str = item.get("last_seen_published")
+                since_dt = None
+                if last_seen_str:
+                    try:
+                        since_dt = date_parser.parse(last_seen_str)
+                    except:
+                        pass
+                
+                # ニュース取得
+                news_list = crawler.fetch_latest_news(kw, since_dt=since_dt)
+                # SNS取得
+                sns_list = crawler.fetch_sns_posts(kw)
+                
+                if news_list or sns_list:
+                    total_message_lines.append(f"\n◆ {kw}")
+                    
+                    if news_list:
+                        total_message_lines.append("  [News]")
+                        for news in news_list:
+                            total_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                        send_to_spreadsheet(kw, news_list)
+                        
+                        latest_dt = news_list[-1]["pub_dt"]
+                        if latest_dt:
+                            database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
+                            
+                    if sns_list:
+                        total_message_lines.append("  [SNS/X]")
+                        sns_for_sheet = []
+                        for sns in sns_list:
+                            total_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                            sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
+                        send_to_spreadsheet(kw + " (SNS)", sns_for_sheet)
+
+            if len(total_message_lines) > 1:
+                full_msg = "\n".join(total_message_lines)
+                if len(full_msg) > 4000:
+                    send_push_message(user_id, full_msg[:4000] + "\n(長い文章のため省略されました)")
+                else:
+                    send_push_message(user_id, full_msg)
                 
     background_tasks.add_task(job)
     return {"status": "Daily clip job started"}
