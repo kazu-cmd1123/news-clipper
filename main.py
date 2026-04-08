@@ -39,6 +39,8 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+import requests
+
 def send_push_message(user_id: str, text: str):
     """ユーザー宛にプッシュメッセージを送信する"""
     if not LINE_CHANNEL_ACCESS_TOKEN:
@@ -53,6 +55,28 @@ def send_push_message(user_id: str, text: str):
                 messages=[TextMessage(text=text)]
             )
         )
+
+def send_to_spreadsheet(keyword: str, news_list: List[Dict]):
+    """取得したニュースをGoogleスプレッドシート（GAS）に送信する"""
+    webhook_url = os.getenv("SPREADSHEET_WEBHOOK_URL")
+    if not webhook_url or not news_list:
+        return
+        
+    try:
+        # 必要なデータだけを抽出して送信
+        payload = {
+            "keyword": keyword,
+            "news": [
+                {
+                    "title": n.get("title"),
+                    "link": n.get("link"),
+                    "published": n.get("published")
+                } for n in news_list
+            ]
+        }
+        requests.post(webhook_url, json=payload, timeout=5)
+    except Exception as e:
+        logger.error(f"Error sending to spreadsheet: {e}")
 
 @app.get("/")
 def read_root():
@@ -119,6 +143,7 @@ def handle_message(event):
             for kw in keywords:
                 news_list = crawler.fetch_latest_news(kw, max_items=3)
                 if news_list:
+                    send_to_spreadsheet(kw, news_list)
                     message_lines.append(f"\n◆ {kw}")
                     for news in news_list:
                         message_lines.append(f"・{news['title']} ({news['published']})\n{news['link']}")
@@ -204,6 +229,7 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
             for kw in keywords:
                 news_list = crawler.fetch_latest_news(kw, max_items=3)
                 if news_list:
+                    send_to_spreadsheet(kw, news_list)
                     message_lines.append(f"\n◆ {kw}")
                     for news in news_list:
                         message_lines.append(f"・{news['title']} ({news['published']})\n{news['link']}")
