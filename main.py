@@ -329,9 +329,10 @@ def cron_trend_monitor(background_tasks: BackgroundTasks):
         # 同じキーワードを複数人が登録している場合のキャッシュ
         volume_cache = {}
         
-        for user_id, keywords in user_keywords.items():
+        for user_id, keywords_info in user_keywords.items():
             alerts = []
-            for kw in keywords:
+            for item in keywords_info:
+                kw = item["keyword"]
                 if kw not in volume_cache:
                     vol = crawler.check_trend_volume(kw)
                     volume_cache[kw] = vol
