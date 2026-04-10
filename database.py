@@ -143,10 +143,40 @@ def get_delivery_times(user_id: str) -> List[str]:
     try:
         response = client.table("user_settings").select("delivery_time").eq("user_id", user_id).execute()
         if response.data:
-            return _parse_times(response.data[0]["delivery_time"]) or ["07:00"]
+            return _parse_times(response.data[0].get("delivery_time")) or ["07:00"]
     except Exception as e:
         logger.error(f"Error fetching delivery times: {e}")
     return ["07:00"]
+
+
+def set_spreadsheet_url(user_id: str, url: str) -> bool:
+    """ユーザー専用のスプレッドシートWebhook URLを保存する"""
+    client = get_db_client()
+    if not client:
+        return False
+    try:
+        client.table("user_settings").upsert({
+            "user_id": user_id,
+            "spreadsheet_url": url
+        }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Error setting spreadsheet url: {e}")
+        return False
+
+
+def get_spreadsheet_url(user_id: str) -> Optional[str]:
+    """ユーザーのスプレッドシートURLを取得する"""
+    client = get_db_client()
+    if not client:
+        return None
+    try:
+        response = client.table("user_settings").select("spreadsheet_url").eq("user_id", user_id).execute()
+        if response.data:
+            return response.data[0].get("spreadsheet_url")
+    except Exception as e:
+        logger.error(f"Error fetching spreadsheet url: {e}")
+    return None
 
 
 def add_delivery_time(user_id: str, time_str: str) -> tuple[bool, str]:
@@ -184,14 +214,17 @@ def remove_delivery_time(user_id: str, time_str: str) -> tuple[bool, str]:
 
 
 def get_all_users_settings() -> dict:
-    """Returns a dict of user_id -> List[delivery_time]"""
+    """Returns a dict of user_id -> {delivery_times: List[str], spreadsheet_url: str}"""
     client = get_db_client()
     if not client:
         return {}
     try:
-        response = client.table("user_settings").select("user_id, delivery_time").execute()
+        response = client.table("user_settings").select("user_id, delivery_time, spreadsheet_url").execute()
         return {
-            row["user_id"]: _parse_times(row["delivery_time"]) or ["07:00"]
+            row["user_id"]: {
+                "delivery_times": _parse_times(row.get("delivery_time")) or ["07:00"],
+                "spreadsheet_url": row.get("spreadsheet_url")
+            }
             for row in response.data
         }
     except Exception as e:

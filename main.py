@@ -56,14 +56,25 @@ def send_push_message(user_id: str, text: str):
             )
         )
 
-def send_to_spreadsheet(keyword: str, news_list: List[Dict]):
-    """取得したニュースをGoogleスプレッドシート（GAS）に送信する"""
-    webhook_url = os.getenv("SPREADSHEET_WEBHOOK_URL")
-    if not webhook_url or not news_list:
+def send_to_spreadsheet(user_id: str, keyword: str, news_list: List[Dict]):
+    """
+    取得したニュースをユーザー個別のGoogleスプレッドシート（GAS）に送信する。
+    URLが設定されていない場合は何もしない。
+    """
+    if not news_list:
+        return
+        
+    # ユーザー個別のURLを取得
+    webhook_url = database.get_spreadsheet_url(user_id)
+    
+    # 未設定の場合は環境変数をフォールバックとして使用（管理者のデフォルト設定用）
+    if not webhook_url:
+        webhook_url = os.getenv("SPREADSHEET_WEBHOOK_URL")
+        
+    if not webhook_url:
         return
         
     try:
-        # 必要なデータだけを抽出して送信
         payload = {
             "keyword": keyword,
             "news": [
@@ -76,7 +87,8 @@ def send_to_spreadsheet(keyword: str, news_list: List[Dict]):
         }
         requests.post(webhook_url, json=payload, timeout=5)
     except Exception as e:
-        logger.error(f"Error sending to spreadsheet: {e}")
+        logger.error(f"Error sending to spreadsheet for user {user_id}: {e}")
+
 
 @app.get("/")
 def read_root():
@@ -169,7 +181,7 @@ def handle_message(event):
                         total_message_lines.append("  [News]")
                         for news in news_list:
                             total_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
-                        send_to_spreadsheet(kw, news_list)
+                        send_to_spreadsheet(user_id, kw, news_list)
                         
                         # 最新の日時をDBに保存
                         latest_dt = news_list[-1]["pub_dt"]
@@ -183,7 +195,7 @@ def handle_message(event):
                         for sns in sns_list:
                             total_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
                             sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
-                        send_to_spreadsheet(kw + " (SNS)", sns_for_sheet)
+                        send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
 
             if len(total_message_lines) > 1:
                 # LINEのメッセージサイズ制限に配慮し、長すぎる場合は分割して送る工夫
@@ -200,37 +212,134 @@ def handle_message(event):
         reply_text = "新着記事とSNS投稿を確認しています。少しお待ちください..."
             
     elif text.startswith("配信時間"):
-        time_str = text.replace("配信時間", "").strip()
-        time_str = time_str.replace("時", ":00")
         import re
-        match = re.search(r"([0-2]?[0-9])", time_str)
-        if match:
-            hour = match.group(1).zfill(2)
-            formatted_time = f"{hour}:00"
-            success = database.set_delivery_time(user_id, formatted_time)
-            if success:
-                reply_text = f"毎日のニュース配信時間を {formatted_time} に設定しました。\n（※システム上、時間はぴったり1時間単位となります）"
+        subcmd_str = text.replace("配信時間", "").strip()
+
+        def parse_time(s: str):
+            """文字列から HH:00 形式を抽出する"""
+            s = s.replace("時", ":00")
+            m = re.search(r"([0-2]?[0-9])(?::00)?", s)
+            if m:
+                return f"{m.group(1).zfill(2)}:00"
+            return None
+
+        if subcmd_str == "一覧" or subcmd_str == "":
+            # 現在の設定を表示
+            times = database.get_delivery_times(user_id)
+            times_str = "\n".join([f"  {i+1}. {t}" for i, t in enumerate(times)])
+            reply_text = (
+                f"現在の配信時間（最大4つ）:\n{times_str}\n\n"
+                "追加: 配信時間 追加 [時刻]\n"
+                "削除: 配信時間 削除 [時刻]\n"
+                "例: 配信時間 追加 12:00"
+            )
+
+        elif subcmd_str.startswith("追加"):
+            time_part = subcmd_str.replace("追加", "").strip()
+            formatted = parse_time(time_part)
+            if formatted:
+                ok, msg = database.add_delivery_time(user_id, formatted)
+                if ok:
+                    times = database.get_delivery_times(user_id)
+                    reply_text = (
+                        f"配信時間 {formatted} を追加しました。\n"
+                        f"現在の設定: {', '.join(times)}"
+                    )
+                else:
+                    reply_text = f"追加できませんでした。\n{msg}"
             else:
-                reply_text = "配信時間の設定に失敗しました。"
+                reply_text = "時刻の形式が正しくありません。\n例: 配信時間 追加 07:00\n例: 配信時間 追加 8時"
+
+        elif subcmd_str.startswith("削除"):
+            time_part = subcmd_str.replace("削除", "").strip()
+            formatted = parse_time(time_part)
+            if formatted:
+                ok, msg = database.remove_delivery_time(user_id, formatted)
+                if ok:
+                    times = database.get_delivery_times(user_id)
+                    reply_text = (
+                        f"配信時間 {formatted} を削除しました。\n"
+                        f"現在の設定: {', '.join(times)}"
+                    )
+                else:
+                    reply_text = f"削除できませんでした。\n{msg}"
+            else:
+                reply_text = "時刻の形式が正しくありません。\n例: 配信時間 削除 07:00"
+
         else:
-            reply_text = "配信時間は数字（時間）で指定してください。\n例: 配信時間 07:00\n例: 配信時間 8時"
+            # 後方互換: "配信時間 07:00" → 追加として扱う
+            formatted = parse_time(subcmd_str)
+            if formatted:
+                ok, msg = database.add_delivery_time(user_id, formatted)
+                if ok:
+                    times = database.get_delivery_times(user_id)
+                    reply_text = (
+                        f"配信時間 {formatted} を追加しました。\n"
+                        f"現在の設定: {', '.join(times)}"
+                    )
+                else:
+                    reply_text = f"追加できませんでした。\n{msg}"
+            else:
+                reply_text = (
+                    "配信時間コマンドの使い方:\n"
+                    "・配信時間 一覧  → 現在の設定を確認\n"
+                    "・配信時間 追加 [時刻]  → 追加（最大4つ）\n"
+                    "・配信時間 削除 [時刻]  → 削除\n"
+                    "例: 配信時間 追加 07:00"
+                )
             
+    elif text.startswith("連携"):
+        import re
+        if text.startswith("連携手順"):
+            reply_text = (
+                "【📊 スプレッドシート連携手順】\n\n"
+                "1. Googleスプレッドシートを新規作成します。\n"
+                "2. 「拡張機能」>「Apps Script」を開きます。\n"
+                "3. 元のコードをすべて消して、以下のガイドページにある「GASコード」を貼り付けて保存します。\n"
+                "   👉 [連携用GASコードを表示]\n"
+                "4. 右上の「デプロイ」>「新しいデプロイ」を選択。\n"
+                "5. 種類を「ウェブアプリ」にし、アクセスできるユーザーを「全員」に設定してデプロイします。\n"
+                "6. 発行された「ウェブアプリのURL」をコピーして、この画面で以下のように送信してください。\n\n"
+                "「連携 https://script.google.com/...」\n\n"
+                "※これで、あなた専用のシートに自動でニュースが記録されるようになります！"
+            )
+        elif text == "連携解除":
+            database.set_spreadsheet_url(user_id, "")
+            reply_text = "スプレッドシート連携を解除しました。"
+        else:
+            url_match = re.search(r"(https://script\.google\.com/[^\s]+)", text)
+            if url_match:
+                url = url_match.group(1)
+                success = database.set_spreadsheet_url(user_id, url)
+                if success:
+                    reply_text = "スプレッドシート連携を設定しました！今後、新着ニュースがあなたのシートに自動転送されます。"
+                else:
+                    reply_text = "連携設定中にエラーが発生しました。もう一度お試しください。"
+            else:
+                reply_text = (
+                    "連携するURLが正しくありません。\n"
+                    "例: 連携 https://script.google.com/...\n\n"
+                    "手順がわからない場合は「連携手順」と送信してください。"
+                )
+
     elif text in ["使い方", "ヘルプ"]:
         reply_text = (
             "【🤖 コマンド一覧】\n\n"
             "📰 ニュース機能\n"
             "「追加 [キーワード]」\n"
-            "  -> 例: 追加 AI\n"
             "「削除 [キーワード]」\n"
-            "  -> 例: 削除 AI\n"
             "「一覧」\n"
-            "  -> 登録中のキーワードを確認\n"
-            "「ニュース」\n"
-            "  -> 今すぐ最新ニュースを取得！\n\n"
+            "「ニュース」（今すぐ取得）\n\n"
             "⚙️ 設定機能\n"
-            "「配信時間 [時間]」\n"
-            "  -> 例: 配信時間 07:00\n"
-            "  ※毎日の自動配信時間を指定できます。"
+            "「配信時間 一覧/追加/削除」\n"
+            "  -> 毎日決まった時間に自動配信します\n\n"
+            "📊 スプレッドシート連携\n"
+            "「連携手順」\n"
+            "  -> 設定方法のガイドを表示します\n"
+            "「連携 [GASのURL]」\n"
+            "  -> 自分専用のシートに記録を開始します\n"
+            "「連携解除」\n"
+            "  -> 連携をストップします"
         )
 
     else:
@@ -265,11 +374,14 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
             if not keywords_info:
                 continue
                 
-            delivery_time = user_settings.get(user_id, "07:00")
-            if delivery_time != current_hour_str:
+            settings = user_settings.get(user_id, {"delivery_times": ["07:00"], "spreadsheet_url": None})
+            delivery_times = settings.get("delivery_times", ["07:00"])
+            user_spreadsheet_url = settings.get("spreadsheet_url")
+
+            if current_hour_str not in delivery_times:
                 continue
             
-            total_message_lines = [f"【本日のニュース＆SNS（{delivery_time}配信号）】"]
+            total_message_lines = [f"【本日のニュース＆SNS（{current_hour_str}配信号）】"]
             
             for item in keywords_info:
                 kw = item["keyword"]
@@ -293,7 +405,9 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
                         total_message_lines.append("  [News]")
                         for news in news_list:
                             total_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
-                        send_to_spreadsheet(kw, news_list)
+                        
+                        # 個別スプレッドシート送信
+                        send_to_spreadsheet(user_id, kw, news_list)
                         
                         latest_dt = news_list[-1]["pub_dt"]
                         if latest_dt:
@@ -305,7 +419,9 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
                         for sns in sns_list:
                             total_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
                             sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
-                        send_to_spreadsheet(kw + " (SNS)", sns_for_sheet)
+                        
+                        # 個別スプレッドシート送信 (SNS)
+                        send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
 
             if len(total_message_lines) > 1:
                 full_msg = "\n".join(total_message_lines)
