@@ -155,7 +155,7 @@ def handle_message(event):
                 send_push_message(user_id, "登録されているキーワードはありません。まずは「追加」でキーワードを登録してください。")
                 return
                 
-            total_message_lines = ["【新着ニュース＆SNS】"]
+            any_news_found = False
             
             for item in user_kw_data:
                 kw = item["keyword"]
@@ -174,13 +174,14 @@ def handle_message(event):
                 sns_list = crawler.fetch_sns_posts(kw)
                 
                 if news_list or sns_list:
-                    total_message_lines.append(f"\n◆ {kw}")
+                    any_news_found = True
+                    kw_message_lines = [f"◆ {kw}"]
                     
                     # ニュースの表示とスプレッドシート送信
                     if news_list:
-                        total_message_lines.append("  [News]")
+                        kw_message_lines.append("  [News]")
                         for news in news_list:
-                            total_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                            kw_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
                         send_to_spreadsheet(user_id, kw, news_list)
                         
                         # 最新の日時をDBに保存
@@ -190,22 +191,25 @@ def handle_message(event):
                     
                     # SNSの表示とスプレッドシート送信
                     if sns_list:
-                        total_message_lines.append("  [SNS/X]")
+                        if news_list:
+                            kw_message_lines.append("") # ニュースとSNSの間に空行
+                        kw_message_lines.append("  [SNS/X]")
                         sns_for_sheet = []
                         for sns in sns_list:
-                            total_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                            kw_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
                             sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
                         send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
 
-            if len(total_message_lines) > 1:
-                # LINEのメッセージサイズ制限に配慮し、長すぎる場合は分割して送る工夫
-                full_msg = "\n".join(total_message_lines)
-                if len(full_msg) > 4000:
-                    send_push_message(user_id, full_msg[:4000] + "\n(長い文章のため省略されました)")
-                else:
-                    send_push_message(user_id, full_msg)
-            else:
+                    # キーワードごとに即座に送信
+                    kw_msg = "\n".join(kw_message_lines)
+                    if len(kw_msg) > 4000:
+                        send_push_message(user_id, kw_msg[:4000] + "\n(文字数制限のため一部省略)")
+                    else:
+                        send_push_message(user_id, kw_msg)
+
+            if not any_news_found:
                 send_push_message(user_id, "前回取得以降の新着情報はありませんでした。")
+
 
         import threading
         threading.Thread(target=fetch_user_news).start()
@@ -381,7 +385,8 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
             if current_hour_str not in delivery_times:
                 continue
             
-            total_message_lines = [f"【本日のニュース＆SNS（{current_hour_str}配信号）】"]
+            # 定期配信の開始を知らせる（ユーザーごと）
+            # send_push_message(user_id, f"【本日のニュース＆SNS（{current_hour_str}配信号）】")
             
             for item in keywords_info:
                 kw = item["keyword"]
@@ -399,12 +404,12 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
                 sns_list = crawler.fetch_sns_posts(kw)
                 
                 if news_list or sns_list:
-                    total_message_lines.append(f"\n◆ {kw}")
+                    kw_message_lines = [f"【本日のニュース: {kw}】"]
                     
                     if news_list:
-                        total_message_lines.append("  [News]")
+                        kw_message_lines.append("  [News]")
                         for news in news_list:
-                            total_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                            kw_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
                         
                         # 個別スプレッドシート送信
                         send_to_spreadsheet(user_id, kw, news_list)
@@ -414,21 +419,23 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
                             database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
                             
                     if sns_list:
-                        total_message_lines.append("  [SNS/X]")
+                        if news_list:
+                            kw_message_lines.append("")
+                        kw_message_lines.append("  [SNS/X]")
                         sns_for_sheet = []
                         for sns in sns_list:
-                            total_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                            kw_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
                             sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
                         
                         # 個別スプレッドシート送信 (SNS)
                         send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
 
-            if len(total_message_lines) > 1:
-                full_msg = "\n".join(total_message_lines)
-                if len(full_msg) > 4000:
-                    send_push_message(user_id, full_msg[:4000] + "\n(長い文章のため省略されました)")
-                else:
-                    send_push_message(user_id, full_msg)
+                    # キーワードごとに個別にプッシュ送信
+                    kw_msg = "\n".join(kw_message_lines)
+                    if len(kw_msg) > 4000:
+                        send_push_message(user_id, kw_msg[:4000] + "\n(文字数制限のため一部省略)")
+                    else:
+                        send_push_message(user_id, kw_msg)
                 
     background_tasks.add_task(job)
     return {"status": "Daily clip job started"}
