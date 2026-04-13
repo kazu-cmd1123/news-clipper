@@ -171,11 +171,13 @@ def get_spreadsheet_url(user_id: str) -> Optional[str]:
     if not client:
         return None
     try:
+        # まずは全ての要素を取得してみる
         response = client.table("user_settings").select("spreadsheet_url").eq("user_id", user_id).execute()
         if response.data:
             return response.data[0].get("spreadsheet_url")
     except Exception as e:
-        logger.error(f"Error fetching spreadsheet url: {e}")
+        # カラムがない場合などはここに来る
+        logger.warning(f"Note: spreadsheet_url column might be missing from user_settings Table: {e}")
     return None
 
 
@@ -218,7 +220,9 @@ def get_all_users_settings() -> dict:
     client = get_db_client()
     if not client:
         return {}
+    
     try:
+        # まずは理想的な構成で取得を試みる
         response = client.table("user_settings").select("user_id, delivery_time, spreadsheet_url").execute()
         return {
             row["user_id"]: {
@@ -228,5 +232,17 @@ def get_all_users_settings() -> dict:
             for row in response.data
         }
     except Exception as e:
-        logger.error(f"Error fetching all settings: {e}")
-        return {}
+        # spreadsheet_url カラムが存在しない可能性を考慮してフォールバック
+        logger.info(f"Retrying get_all_users_settings without spreadsheet_url column: {e}")
+        try:
+            response = client.table("user_settings").select("user_id, delivery_time").execute()
+            return {
+                row["user_id"]: {
+                    "delivery_times": _parse_times(row.get("delivery_time")) or ["07:00"],
+                    "spreadsheet_url": None
+                }
+                for row in response.data
+            }
+        except Exception as e_inner:
+            logger.error(f"Critical error fetching all settings: {e_inner}")
+            return {}

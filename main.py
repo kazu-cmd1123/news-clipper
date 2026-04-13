@@ -366,76 +366,78 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
     毎朝実行される想定。全員のキーワードについてニュースを取得して通知。
     """
     def job():
-        import datetime
-        from dateutil import parser as date_parser
-        jst_tz = datetime.timezone(datetime.timedelta(hours=9))
-        current_hour_str = datetime.datetime.now(jst_tz).strftime('%H:00')
+        try:
+            import datetime
+            from dateutil import parser as date_parser
+            jst_tz = datetime.timezone(datetime.timedelta(hours=9))
+            current_hour_str = datetime.datetime.now(jst_tz).strftime('%H:00')
 
-        user_kw_all_data = database.get_all_users_and_keywords()
-        user_settings = database.get_all_users_settings()
-        
-        for user_id, keywords_info in user_kw_all_data.items():
-            if not keywords_info:
-                continue
-                
-            settings = user_settings.get(user_id, {"delivery_times": ["07:00"], "spreadsheet_url": None})
-            delivery_times = settings.get("delivery_times", ["07:00"])
-            user_spreadsheet_url = settings.get("spreadsheet_url")
-
-            if current_hour_str not in delivery_times:
-                continue
+            user_kw_all_data = database.get_all_users_and_keywords()
+            user_settings = database.get_all_users_settings()
             
-            # 定期配信の開始を知らせる（ユーザーごと）
-            # send_push_message(user_id, f"【本日のニュース＆SNS（{current_hour_str}配信号）】")
-            
-            for item in keywords_info:
-                kw = item["keyword"]
-                last_seen_str = item.get("last_seen_published")
-                since_dt = None
-                if last_seen_str:
-                    try:
-                        since_dt = date_parser.parse(last_seen_str)
-                    except:
-                        pass
-                
-                # ニュース取得
-                news_list = crawler.fetch_latest_news(kw, since_dt=since_dt)
-                # SNS取得
-                sns_list = crawler.fetch_sns_posts(kw)
-                
-                if news_list or sns_list:
-                    kw_message_lines = [f"【本日のニュース: {kw}】"]
+            for user_id, keywords_info in user_kw_all_data.items():
+                if not keywords_info:
+                    continue
                     
-                    if news_list:
-                        kw_message_lines.append("  [News]")
-                        for news in news_list:
-                            kw_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
-                        
-                        # 個別スプレッドシート送信
-                        send_to_spreadsheet(user_id, kw, news_list)
-                        
-                        latest_dt = news_list[-1]["pub_dt"]
-                        if latest_dt:
-                            database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
-                            
-                    if sns_list:
-                        if news_list:
-                            kw_message_lines.append("")
-                        kw_message_lines.append("  [SNS/X]")
-                        sns_for_sheet = []
-                        for sns in sns_list:
-                            kw_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
-                            sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
-                        
-                        # 個別スプレッドシート送信 (SNS)
-                        send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
+                settings = user_settings.get(user_id, {"delivery_times": ["07:00"], "spreadsheet_url": None})
+                delivery_times = settings.get("delivery_times", ["07:00"])
+                user_spreadsheet_url = settings.get("spreadsheet_url")
 
-                    # キーワードごとに個別にプッシュ送信
-                    kw_msg = "\n".join(kw_message_lines)
-                    if len(kw_msg) > 4000:
-                        send_push_message(user_id, kw_msg[:4000] + "\n(文字数制限のため一部省略)")
-                    else:
-                        send_push_message(user_id, kw_msg)
+                if current_hour_str not in delivery_times:
+                    continue
+                
+                logger.info(f"Starting scheduled delivery for user {user_id} at {current_hour_str}")
+                
+                for item in keywords_info:
+                    kw = item["keyword"]
+                    last_seen_str = item.get("last_seen_published")
+                    since_dt = None
+                    if last_seen_str:
+                        try:
+                            since_dt = date_parser.parse(last_seen_str)
+                        except:
+                            pass
+                    
+                    # ニュース取得
+                    news_list = crawler.fetch_latest_news(kw, since_dt=since_dt)
+                    # SNS取得
+                    sns_list = crawler.fetch_sns_posts(kw)
+                    
+                    if news_list or sns_list:
+                        kw_message_lines = [f"【本日のニュース: {kw}】"]
+                        
+                        if news_list:
+                            kw_message_lines.append("  [News]")
+                            for news in news_list:
+                                kw_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                            
+                            # 個別スプレッドシート送信
+                            send_to_spreadsheet(user_id, kw, news_list)
+                            
+                            latest_dt = news_list[-1]["pub_dt"]
+                            if latest_dt:
+                                database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
+                                
+                        if sns_list:
+                            if news_list:
+                                kw_message_lines.append("")
+                            kw_message_lines.append("  [SNS/X]")
+                            sns_for_sheet = []
+                            for sns in sns_list:
+                                kw_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                                sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
+                            
+                            # 個別スプレッドシート送信 (SNS)
+                            send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
+
+                        # キーワードごとに個別にプッシュ送信
+                        kw_msg = "\n".join(kw_message_lines)
+                        if len(kw_msg) > 4000:
+                            send_push_message(user_id, kw_msg[:4000] + "\n(文字数制限のため一部省略)")
+                        else:
+                            send_push_message(user_id, kw_msg)
+        except Exception as e:
+            logger.error(f"Fatal error in daily-clip background job: {e}")
                 
     background_tasks.add_task(job)
     return {"status": "Daily clip job started"}
@@ -446,27 +448,30 @@ def cron_trend_monitor(background_tasks: BackgroundTasks):
     数十分ごとに実行される想定。X(Yahoo)での急増を検知。
     """
     def job():
-        INFLAMMATION_THRESHOLD = 500  # 例: 閾値。実際の運用で増減させる
-        user_keywords = database.get_all_users_and_keywords()
-        
-        # 同じキーワードを複数人が登録している場合のキャッシュ
-        volume_cache = {}
-        
-        for user_id, keywords_info in user_keywords.items():
-            alerts = []
-            for item in keywords_info:
-                kw = item["keyword"]
-                if kw not in volume_cache:
-                    vol = crawler.check_trend_volume(kw)
-                    volume_cache[kw] = vol
-                
-                vol = volume_cache[kw]
-                if vol > INFLAMMATION_THRESHOLD:
-                    encoded_kw = urllib.parse.quote(kw)
-                    alerts.append(f"⚠️ 炎上・トレンド検知 ⚠️\nキーワード「{kw}」の言及数が急増しています (約{vol}件)。\n確認リンク: https://search.yahoo.co.jp/realtime/search?p={encoded_kw}")
+        try:
+            INFLAMMATION_THRESHOLD = 500  # 例: 閾値。実際の運用で増減させる
+            user_keywords = database.get_all_users_and_keywords()
             
-            if alerts:
-                send_push_message(user_id, "\n\n".join(alerts))
+            # 同じキーワードを複数人が登録している場合のキャッシュ
+            volume_cache = {}
+            
+            for user_id, keywords_info in user_keywords.items():
+                alerts = []
+                for item in keywords_info:
+                    kw = item["keyword"]
+                    if kw not in volume_cache:
+                        vol = crawler.check_trend_volume(kw)
+                        volume_cache[kw] = vol
+                    
+                    vol = volume_cache[kw]
+                    if vol > INFLAMMATION_THRESHOLD:
+                        encoded_kw = urllib.parse.quote(kw)
+                        alerts.append(f"⚠️ 炎上・トレンド検知 ⚠️\nキーワード「{kw}」の言及数が急増しています (約{vol}件)。\n確認リンク: https://search.yahoo.co.jp/realtime/search?p={encoded_kw}")
+                
+                if alerts:
+                    send_push_message(user_id, "\n\n".join(alerts))
+        except Exception as e:
+            logger.error(f"Fatal error in trend-monitor background job: {e}")
                 
     background_tasks.add_task(job)
     return {"status": "Trend monitor job started"}
