@@ -175,41 +175,46 @@ def handle_message(event):
                 
                 if news_list or sns_list:
                     any_news_found = True
-                    kw_message_lines = [f"◆ {kw}"]
                     
-                    # ニュースの表示とスプレッドシート送信
+                    # ニュースの表示と送信
                     if news_list:
-                        kw_message_lines.append("  [News]")
+                        news_msg_lines = [f"📰 【ニュース】{kw}"]
                         for news in news_list:
-                            kw_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                            news_msg_lines.append(f"・{news['title']} ({news['published']})\n{news['link']}")
+                        
                         send_to_spreadsheet(user_id, kw, news_list)
                         
                         # 最新の日時をDBに保存
                         latest_dt = news_list[-1]["pub_dt"]
                         if latest_dt:
                             database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
+                        
+                        # LINE送信
+                        news_msg = "\n\n".join(news_msg_lines)
+                        if len(news_msg) > 4000:
+                            send_push_message(user_id, news_msg[:4000] + "\n(文字数制限のため一部省略)")
+                        else:
+                            send_push_message(user_id, news_msg)
                     
-                    # SNSの表示とスプレッドシート送信
+                    # SNSの表示と送信
                     if sns_list:
-                        if news_list:
-                            kw_message_lines.append("") # ニュースとSNSの間に空行
-                        kw_message_lines.append("  [SNS/X]")
+                        sns_msg_lines = [f"🐦 【SNS/X】{kw}"]
                         sns_for_sheet = []
                         for sns in sns_list:
-                            kw_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                            sns_msg_lines.append(f"・{sns['text']} ({sns['time']})\n{sns['link']}")
                             sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
+                        
                         send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
 
-                    # キーワードごとに即座に送信
-                    kw_msg = "\n".join(kw_message_lines)
-                    if len(kw_msg) > 4000:
-                        send_push_message(user_id, kw_msg[:4000] + "\n(文字数制限のため一部省略)")
-                    else:
-                        send_push_message(user_id, kw_msg)
+                        # LINE送信
+                        sns_msg = "\n\n".join(sns_msg_lines)
+                        if len(sns_msg) > 4000:
+                            send_push_message(user_id, sns_msg[:4000] + "\n(文字数制限のため一部省略)")
+                        else:
+                            send_push_message(user_id, sns_msg)
 
             if not any_news_found:
                 send_push_message(user_id, "前回取得以降の新着情報はありませんでした。")
-
 
         import threading
         threading.Thread(target=fetch_user_news).start()
@@ -404,12 +409,11 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
                     sns_list = crawler.fetch_sns_posts(kw)
                     
                     if news_list or sns_list:
-                        kw_message_lines = [f"【本日のニュース: {kw}】"]
-                        
+                        # ニュースの送信
                         if news_list:
-                            kw_message_lines.append("  [News]")
+                            news_msg_lines = [f"📰 【本日のニュース: {kw}】"]
                             for news in news_list:
-                                kw_message_lines.append(f"  ・{news['title']} ({news['published']})\n  {news['link']}")
+                                news_msg_lines.append(f"・{news['title']} ({news['published']})\n{news['link']}")
                             
                             # 個別スプレッドシート送信
                             send_to_spreadsheet(user_id, kw, news_list)
@@ -417,25 +421,31 @@ def cron_daily_clip(background_tasks: BackgroundTasks):
                             latest_dt = news_list[-1]["pub_dt"]
                             if latest_dt:
                                 database.update_last_seen_published(user_id, kw, latest_dt.isoformat())
+                            
+                            # LINE送信
+                            news_msg = "\n\n".join(news_msg_lines)
+                            if len(news_msg) > 4000:
+                                send_push_message(user_id, news_msg[:4000] + "\n(文字数制限のため一部省略)")
+                            else:
+                                send_push_message(user_id, news_msg)
                                 
+                        # SNSの送信
                         if sns_list:
-                            if news_list:
-                                kw_message_lines.append("")
-                            kw_message_lines.append("  [SNS/X]")
+                            sns_msg_lines = [f"🐦 【本日のSNS/X: {kw}】"]
                             sns_for_sheet = []
                             for sns in sns_list:
-                                kw_message_lines.append(f"  ・{sns['text']} ({sns['time']})\n  {sns['link']}")
+                                sns_msg_lines.append(f"・{sns['text']} ({sns['time']})\n{sns['link']}")
                                 sns_for_sheet.append({"title": sns["text"], "link": sns["link"], "published": sns["time"]})
                             
                             # 個別スプレッドシート送信 (SNS)
                             send_to_spreadsheet(user_id, kw + " (SNS)", sns_for_sheet)
 
-                        # キーワードごとに個別にプッシュ送信
-                        kw_msg = "\n".join(kw_message_lines)
-                        if len(kw_msg) > 4000:
-                            send_push_message(user_id, kw_msg[:4000] + "\n(文字数制限のため一部省略)")
-                        else:
-                            send_push_message(user_id, kw_msg)
+                            # LINE送信
+                            sns_msg = "\n\n".join(sns_msg_lines)
+                            if len(sns_msg) > 4000:
+                                send_push_message(user_id, sns_msg[:4000] + "\n(文字数制限のため一部省略)")
+                            else:
+                                send_push_message(user_id, sns_msg)
         except Exception as e:
             logger.error(f"Fatal error in daily-clip background job: {e}")
                 
