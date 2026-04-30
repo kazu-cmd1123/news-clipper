@@ -17,7 +17,9 @@ def fetch_latest_news(keyword: str, since_dt: datetime.datetime = None) -> list:
     url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=ja&gl=JP&ceid=JP:ja"
     
     try:
-        feed = feedparser.parse(url)
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        feed = feedparser.parse(response.content)
         results = []
         from email.utils import parsedate_to_datetime
         
@@ -67,18 +69,27 @@ def fetch_sns_posts(keyword: str, max_items: int = 5) -> list:
         
         posts = []
         # Yahooリアルタイムのリストアイテムを抽出（クラス名は変更される可能性があります）
-        items = soup.find_all("li", class_=re.compile(r"Tweet"))
+        # Yahooリアルタイムのリストアイテムを抽出
+        # 現在は div かつクラス名に Tweet_Tweet が含まれる
+        items = soup.find_all(["li", "div"], class_=re.compile(r"Tweet_Tweet"))
         
         for item in items[:max_items]:
+            # 本文 (Tweet_body...)
             body = item.find(class_=re.compile(r"Tweet_body"))
-            time_elem = item.find("time")
-            link_elem = item.find("a", href=re.compile(r"twitter.com|x.com"))
+            # 時間 (Tweet_time...)
+            time_elem = item.find(class_=re.compile(r"Tweet_time"))
+            # リンク (Tweet_overallLink...)
+            link_elem = item.find("a", href=re.compile(r"realtime/search/tweet|twitter.com|x.com"))
             
             if body:
+                link = link_elem["href"] if link_elem else ""
+                if link.startswith("/"):
+                    link = "https://search.yahoo.co.jp" + link
+                    
                 posts.append({
                     "text": body.get_text(strip=True),
                     "time": time_elem.get_text(strip=True) if time_elem else "不明",
-                    "link": link_elem["href"] if link_elem else ""
+                    "link": link
                 })
         return posts
     except Exception as e:
