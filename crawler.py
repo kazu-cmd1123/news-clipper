@@ -8,49 +8,60 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# デバッグ用
+last_error_info = ""
+
 def _get_rss_feed(url: str):
     """
-    複数の戦略でRSSフィードの取得を試みる
+    複数の戦略とドメインでRSSフィードの取得を試みる
     """
+    global last_error_info
+    
+    # 試行するURLリスト
+    urls = [
+        url,
+        url.replace("news.google.com", "news.google.co.jp"),
+        url.split("&ceid")[0] # ceid抜き
+    ]
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*"
     }
     
-    # 戦略1: requests (User-Agent付き)
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            feed = feedparser.parse(response.text)
+    errors = []
+
+    for target_url in urls:
+        # 戦略1: requests
+        try:
+            response = requests.get(target_url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                feed = feedparser.parse(response.text)
+                if feed.entries:
+                    return feed
+                else:
+                    errors.append(f"Req OK but 0 entries: {target_url}")
+            else:
+                errors.append(f"HTTP {response.status_code}: {target_url}")
+                if response.status_code in [403, 429]:
+                    errors.append(f"Body: {response.text[:100]}")
+        except Exception as e:
+            errors.append(f"Req error ({target_url}): {e}")
+
+        # 戦略2: feedparser 直接
+        try:
+            import ssl
+            if hasattr(ssl, '_create_unverified_context'):
+                ssl._create_default_https_context = ssl._create_unverified_context
+            feed = feedparser.parse(target_url)
             if feed.entries:
                 return feed
-    except Exception as e:
-        logger.debug(f"RSS Strategy 1 (requests) failed: {e}")
+            else:
+                errors.append(f"Direct OK but 0 entries: {target_url}")
+        except Exception as e:
+            errors.append(f"Direct error ({target_url}): {e}")
 
-    # 戦略2: feedparser 直接取得
-    try:
-        # SSL証明書検証エラー回避策 (macOS等で必要)
-        import ssl
-        if hasattr(ssl, '_create_unverified_context'):
-            ssl._create_default_https_context = ssl._create_unverified_context
-        
-        feed = feedparser.parse(url)
-        if feed.entries:
-            return feed
-    except Exception as e:
-        logger.debug(f"RSS Strategy 2 (direct) failed: {e}")
-
-    # 戦略3: urllib.request
-    try:
-        import urllib.request
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            content = response.read().decode('utf-8', errors='replace')
-            feed = feedparser.parse(content)
-            if feed.entries:
-                return feed
-    except Exception as e:
-        logger.debug(f"RSS Strategy 3 (urllib) failed: {e}")
-
+    last_error_info = " | ".join(errors[-5:]) # 直近5件
     return None
 
 def fetch_latest_news(keyword: str, since_dt: datetime.datetime = None) -> list:

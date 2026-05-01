@@ -247,9 +247,11 @@ def handle_message(event):
                 try:
                     test_news = crawler.fetch_latest_news(kw, since_dt=None)
                     count = len(test_news)
+                    err = crawler.last_error_info if count == 0 else ""
                 except Exception as e:
-                    count = f"エラー({e})"
-                lines.append(f"キーワード: {kw}\n最終取得日: {ls}\n現在取得可能件数: {count}件")
+                    count = "エラー"
+                    err = str(e)
+                lines.append(f"キーワード: {kw}\n最終取得日: {ls}\n現在取得可能件数: {count}件\n詳細: {err}")
             
             if len(user_kw_data) > 3:
                 lines.append(f"（他 {len(user_kw_data)-3} 件のキーワードがあります）")
