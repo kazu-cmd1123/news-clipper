@@ -145,8 +145,11 @@ def handle_message(event):
         else:
             reply_text = "登録されているキーワードはありません。"
 
-    elif text == "ニュース":
-        def fetch_user_news():
+    elif text in ["ニュース", "SNS", "全部"]:
+        include_news = text in ["ニュース", "全部"]
+        include_sns = text in ["SNS", "全部"]
+
+        def fetch_user_content(user_id: str, include_news: bool, include_sns: bool):
             import datetime
             from dateutil import parser as date_parser
             
@@ -155,7 +158,7 @@ def handle_message(event):
                 send_push_message(user_id, "登録されているキーワードはありません。まずは「追加」でキーワードを登録してください。")
                 return
                 
-            any_news_found = False
+            any_content_found = False
             
             for item in user_kw_data:
                 kw = item["keyword"]
@@ -167,14 +170,18 @@ def handle_message(event):
                     except:
                         pass
                 
-                # 1. ニュース全件取得
-                news_list = crawler.fetch_latest_news(kw, since_dt=since_dt)
+                # 1. ニュース（ネット記事）取得
+                news_list = []
+                if include_news:
+                    news_list = crawler.fetch_latest_news(kw, since_dt=since_dt)
                 
                 # 2. SNS投稿取得
-                sns_list = crawler.fetch_sns_posts(kw)
+                sns_list = []
+                if include_sns:
+                    sns_list = crawler.fetch_sns_posts(kw)
                 
                 if news_list or sns_list:
-                    any_news_found = True
+                    any_content_found = True
                     
                     # ニュースの表示と送信
                     if news_list:
@@ -213,12 +220,19 @@ def handle_message(event):
                         else:
                             send_push_message(user_id, sns_msg)
 
-            if not any_news_found:
-                send_push_message(user_id, "前回取得以降の新着情報はありませんでした。")
+            if not any_content_found:
+                type_str = ""
+                if include_news and not include_sns: type_str = "ニュースの"
+                elif not include_news and include_sns: type_str = "SNSの"
+                send_push_message(user_id, f"前回取得以降の{type_str}新着情報はありませんでした。")
 
         import threading
-        threading.Thread(target=fetch_user_news).start()
-        reply_text = "新着記事とSNS投稿を確認しています。少しお待ちください..."
+        threading.Thread(target=fetch_user_content, args=(user_id, include_news, include_sns)).start()
+        
+        target_name = "記事とSNS投稿"
+        if include_news and not include_sns: target_name = "ニュース記事"
+        elif not include_news and include_sns: target_name = "SNS投稿"
+        reply_text = f"{target_name}を確認しています。少しお待ちください..."
             
     elif text.startswith("配信時間"):
         import re
@@ -338,7 +352,9 @@ def handle_message(event):
             "「追加 [キーワード]」\n"
             "「削除 [キーワード]」\n"
             "「一覧」\n"
-            "「ニュース」（今すぐ取得）\n\n"
+            "「全部」（記事とSNSの両方を取得）\n"
+            "「ニュース」（ネット記事のみ取得）\n"
+            "「SNS」（SNS投稿のみ取得）\n\n"
             "⚙️ 設定機能\n"
             "「配信時間 一覧/追加/削除」\n"
             "  -> 毎日決まった時間に自動配信します\n\n"
@@ -352,7 +368,7 @@ def handle_message(event):
         )
 
     else:
-        reply_text = "【よく使うコマンド】\n追加 [キーワード]\n削除 [キーワード]\n一覧\nニュース\n\n※すべての機能説明は「ヘルプ」と送信してください。"
+        reply_text = "【よく使うコマンド】\n追加 [キーワード]\n削除 [キーワード]\n一覧\nニュース / SNS / 全部\n\n※すべての機能説明は「ヘルプ」と送信してください。"
         
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
