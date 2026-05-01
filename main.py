@@ -233,6 +233,27 @@ def handle_message(event):
         if include_news and not include_sns: target_name = "ニュース記事"
         elif not include_news and include_sns: target_name = "SNS投稿"
         reply_text = f"{target_name}を確認しています。少しお待ちください..."
+
+    elif text == "デバッグ":
+        user_kw_data = database.get_all_users_and_keywords().get(user_id, [])
+        if not user_kw_data:
+            reply_text = "登録されているキーワードはありません。"
+        else:
+            lines = ["【デバッグ情報】"]
+            # タイムアウト回避のため最大3件まで
+            for item in user_kw_data[:3]:
+                kw = item["keyword"]
+                ls = item.get("last_seen_published", "None")
+                try:
+                    test_news = crawler.fetch_latest_news(kw, since_dt=None)
+                    count = len(test_news)
+                except Exception as e:
+                    count = f"エラー({e})"
+                lines.append(f"キーワード: {kw}\n最終取得日: {ls}\n現在取得可能件数: {count}件")
+            
+            if len(user_kw_data) > 3:
+                lines.append(f"（他 {len(user_kw_data)-3} 件のキーワードがあります）")
+            reply_text = "\n\n".join(lines)
             
     elif text.startswith("配信時間"):
         import re

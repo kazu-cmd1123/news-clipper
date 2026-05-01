@@ -16,26 +16,40 @@ def fetch_latest_news(keyword: str, since_dt: datetime.datetime = None) -> list:
     encoded_keyword = urllib.parse.quote(keyword)
     url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=ja&gl=JP&ceid=JP:ja"
     
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    }
+
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        feed = feedparser.parse(response.content)
+        feed = feedparser.parse(response.text)
         results = []
         from email.utils import parsedate_to_datetime
         
+        if not feed.entries:
+            logger.info(f"No entries found in RSS for keyword: {keyword}")
+            return []
+
         for entry in feed.entries:
-            pub_str = entry.published
+            pub_str = getattr(entry, "published", None)
+            if not pub_str:
+                pub_str = getattr(entry, "pubDate", None)
             try:
-                dt = parsedate_to_datetime(pub_str)
-                # フィルタリング
-                if since_dt and dt <= since_dt:
-                    continue
-                
-                jst_tz = datetime.timezone(datetime.timedelta(hours=9))
-                dt_jst = dt.astimezone(jst_tz)
-                pub_display = dt_jst.strftime('%m/%d %H:%M')
+                if pub_str:
+                    dt = parsedate_to_datetime(pub_str)
+                    # フィルタリング
+                    if since_dt and dt <= since_dt:
+                        continue
+                    
+                    jst_tz = datetime.timezone(datetime.timedelta(hours=9))
+                    dt_jst = dt.astimezone(jst_tz)
+                    pub_display = dt_jst.strftime('%m/%d %H:%M')
+                else:
+                    dt = None
+                    pub_display = "日時不明"
             except Exception:
-                pub_display = pub_str
+                pub_display = str(pub_str) if pub_str else "不明"
                 dt = None
                 
             results.append({
